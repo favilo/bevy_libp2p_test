@@ -1,8 +1,8 @@
 [package]
-name = "bevy_game" # ToDo
+name = "bevy_libp2p"
 version = "0.1.0"
 publish = false
-authors = ["Niklas Eicker <git@nikl.me>"] # ToDo: you are the author ;)
+authors = ["Kevin Oberlies <favilo@gmail.com>"]
 edition = "2021"
 exclude = ["dist", "build", "assets", "credits"]
 
@@ -25,31 +25,30 @@ inherits = "release"
 lto = "thin"
 
 [features]
-dev = [
-    "bevy/bevy_dylib",
-]
+dev = ["bevy/bevy_dylib"]
 
 [dependencies]
 bevy = { version = "0.11", default-features = false, features = [
     "animation",
     "bevy_asset",
-    "bevy_scene",
-    "bevy_winit",
     "bevy_core_pipeline",
-    "bevy_pbr",
     "bevy_gltf",
+    "bevy_pbr",
     "bevy_render",
+    "bevy_scene",
     "bevy_sprite",
     "bevy_text",
     "bevy_ui",
-    "png",
-    "hdr",
-    "zstd",
-    "x11",
-    "ktx2",
+    "bevy_winit",
     "filesystem_watcher",
+    "hdr",
+    "ktx2",
+    "mp3",
+    "png",
     "tonemapping_luts",
-    "webgl2"
+    "webgl2",
+    "x11",
+    "zstd",
 ] }
 bevy_kira_audio = { version = "0.16" }
 bevy_asset_loader = { version = "0.17" }
@@ -58,6 +57,7 @@ rand = { version = "0.8.3" }
 # keep the following in sync with Bevy's dependencies
 winit = { version = "0.28", default-features = false }
 image = { version = "0.24", default-features = false }
+libp2p = { version = "0.52.3", features = ["full"] }
 
 [build-dependencies]
-embed-resource = "1.4"
+embed-resource = "1.8"
