@@ -1,21 +1,24 @@
 // disable console on windows for release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use async_std::task;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::winit::WinitWindows;
 use bevy::DefaultPlugins;
-use bevy_libp2p::GamePlugin; 
+use bevy_libp2p::{network::setup_network, GamePlugin};
 use std::io::Cursor;
 use winit::window::Icon;
 
-fn main() {
+fn main() -> anyhow::Result<()> {
+    let network_manager = task::block_on(setup_network::<(), ()>())?;
     App::new()
         .insert_resource(Msaa::Off)
         .insert_resource(ClearColor(Color::rgb(0.4, 0.4, 0.4)))
+        .insert_resource(network_manager)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Bevy game".to_string(), // ToDo
+                title: "Bevy libP2P demo".to_string(), // ToDo
                 resolution: (800., 600.).into(),
                 // Bind to canvas included in `index.html`
                 canvas: Some("#bevy".to_owned()),
@@ -28,6 +31,8 @@ fn main() {
         .add_plugins(GamePlugin)
         .add_systems(Startup, set_window_icon)
         .run();
+
+    Ok(())
 }
 
 // Sets the icon on windows and X11

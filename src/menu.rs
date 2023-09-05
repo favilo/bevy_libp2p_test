@@ -30,6 +30,9 @@ impl Default for ButtonColors {
     }
 }
 
+#[derive(Component)]
+struct PlayButton;
+
 fn setup_menu(
     mut commands: Commands,
     font_assets: Res<FontAssets>,
@@ -37,18 +40,21 @@ fn setup_menu(
 ) {
     commands.spawn(Camera2dBundle::default());
     commands
-        .spawn(ButtonBundle {
-            style: Style {
-                width: Val::Px(120.0),
-                height: Val::Px(50.0),
-                margin: UiRect::all(Val::Auto),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
+        .spawn((
+            ButtonBundle {
+                style: Style {
+                    width: Val::Px(120.0),
+                    height: Val::Px(50.0),
+                    margin: UiRect::all(Val::Auto),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..Default::default()
+                },
+                background_color: button_colors.normal.into(),
                 ..Default::default()
             },
-            background_color: button_colors.normal.into(),
-            ..Default::default()
-        })
+            PlayButton,
+        ))
         .with_children(|parent| {
             parent.spawn(TextBundle::from_section(
                 "Play",
@@ -66,7 +72,7 @@ fn click_play_button(
     mut state: ResMut<NextState<GameState>>,
     mut interaction_query: Query<
         (&Interaction, &mut BackgroundColor),
-        (Changed<Interaction>, With<Button>),
+        (Changed<Interaction>, (With<Button>, With<PlayButton>)),
     >,
 ) {
     for (interaction, mut color) in &mut interaction_query {
