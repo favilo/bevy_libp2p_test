@@ -1,21 +1,31 @@
 use async_std::{
     channel::{unbounded, Receiver, Sender},
-    stream::StreamExt,
+    task,
 };
 use bevy::prelude::*;
 use futures::{future::Either, prelude::*};
 use libp2p::{
     core::upgrade,
-    dns, gossipsub, identify, identity,dcutr,
+    dcutr, dns, gossipsub, identify, identity,
     kad::{self, store::MemoryStore},
     noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmBuilder},
-    tcp, websocket, yamux, Multiaddr, PeerId, Transport,
+    tcp, websocket, yamux, Multiaddr, PeerId, StreamProtocol, Transport,
 };
 use serde::{Deserialize, Serialize};
 use std::thread;
 
 use crate::crypto::DataEncryptor;
+
+const BOOTNODES: [&str; 4] = [
+    "QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+    "QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+    "QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+    "QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+];
+
+const IDENTIFY_PROTOCOL: &str = "/bevy-p2p-demo/v1";
+const RELAY_PROTOCOL: &str = "/libp2p/circuit/relay/0.2.0/hop";
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -64,6 +74,7 @@ where
 {
     let id_keys = identity::Keypair::generate_ed25519();
     let local_peer_id = PeerId::from(id_keys.public());
+    log::info!("Local peer id: {}", local_peer_id);
 
     let (relay_transport, relay) = relay::client::new(local_peer_id.clone());
     let tcp_transport = dns::DnsConfig::custom(
@@ -93,10 +104,13 @@ where
         .boxed();
 
     let behaviour: Behaviour = {
-        let kad = kad::Kademlia::new(
+        let mut kad = kad::Kademlia::new(
             local_peer_id.clone(),
             MemoryStore::new(local_peer_id.clone()),
         );
+        for peer in &BOOTNODES {
+            kad.add_address(&peer.parse()?, "/dnsaddr/bootstrap.libp2p.io".parse()?);
+        }
         let config = gossipsub::Config::default();
         let (data_encryptor, aes_keys) = DataEncryptor::new();
         let gossip = gossipsub::Behaviour::new_with_transform(
@@ -106,10 +120,15 @@ where
             data_encryptor,
         )
         .map_err(|s: &str| anyhow::anyhow!(s))?;
+        let dcutr = dcutr::Behaviour::new(local_peer_id);
         let ping = ping::Behaviour::default();
-        let identify = identify::Behaviour::new(id_keys.public().clone());
+        let identify = identify::Behaviour::new(identify::Config::new(
+            IDENTIFY_PROTOCOL.into(),
+            id_keys.public(),
+        ));
         Behaviour {
             relay,
+            dcutr,
             kad,
             gossip,
             ping,
@@ -121,8 +140,13 @@ where
         SwarmBuilder::with_async_std_executor(transport, behaviour, local_peer_id).build();
 
     // Start swarm listening.
+    swarm.listen_on(
+        "/dns4/p2p.favil.org/tcp/4001/p2p/12D3KooWJAmx46jdsLbvsEJmUAnQ44Yj4iHmgdsDD4BEYvALnFy8/p2p-circuit".parse()?
+    )?;
     swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
     swarm.listen_on("/ip4/0.0.0.0/tcp/0/ws".parse()?)?;
+    swarm.dial("/dns4/p2p.favil.org/tcp/4001".parse::<Multiaddr>()?)?;
+    swarm.behaviour_mut().kad.bootstrap()?;
 
     // Send events over channel.
     let (to_network, from_game): (Sender<GameEvent<FromGame>>, Receiver<GameEvent<FromGame>>) =
@@ -131,73 +155,54 @@ where
         unbounded();
 
     // Start thread that loops for events and reads the channels
-    thread::spawn(move || async {
-        let mut to_game = to_game;
-        let mut from_game = from_game;
-        let mut swarm = swarm;
-        loop {
-            match futures::future::select(swarm.select_next_some(), from_game.select_next_some())
+    thread::spawn(move || {
+        task::block_on(async {
+            let mut to_game = to_game;
+            let mut from_game = from_game;
+            let mut swarm = swarm;
+            loop {
+                match futures::future::select(
+                    swarm.select_next_some(),
+                    from_game.select_next_some(),
+                )
                 .await
-            {
-                Either::Left((event, _)) => match event {
-                    libp2p::swarm::SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                        to_game
-                            .send(NetworkEvent::Admin(NetworkAdminEvent::Connected(peer_id)))
-                            .await
-                            .unwrap();
-                    }
-                    libp2p::swarm::SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                        to_game
-                            .send(NetworkEvent::Admin(NetworkAdminEvent::Disconnected(
-                                peer_id,
-                            )))
-                            .await
-                            .unwrap();
-                    }
-                    libp2p::swarm::SwarmEvent::IncomingConnection {
-                        connection_id,
-                        local_addr,
-                        send_back_addr,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::IncomingConnectionError {
-                        connection_id,
-                        local_addr,
-                        send_back_addr,
-                        error,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::OutgoingConnectionError {
-                        connection_id,
-                        peer_id,
-                        error,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::NewListenAddr {
-                        listener_id,
-                        address,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::ExpiredListenAddr {
-                        listener_id,
-                        address,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::ListenerClosed {
-                        listener_id,
-                        addresses,
-                        reason,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::ListenerError { listener_id, error } => {}
-                    libp2p::swarm::SwarmEvent::Dialing {
-                        peer_id,
-                        connection_id,
-                    } => {}
-                    libp2p::swarm::SwarmEvent::Behaviour(e) => {
-                        handle_behaviour_event(e, &mut to_game)
-                    }
-                },
-                Either::Right((msg, _)) => match msg {
-                    GameEvent::Admin(_) => todo!(),
-                    GameEvent::Game(_) => todo!(),
-                },
+                {
+                    Either::Left((event, _)) => match event {
+                        libp2p::swarm::SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                            // to_game
+                            //     .send(NetworkEvent::Admin(NetworkAdminEvent::Connected(peer_id)))
+                            //     .await
+                            //     .unwrap();
+                        }
+                        libp2p::swarm::SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                            to_game
+                                .send(NetworkEvent::Admin(NetworkAdminEvent::Disconnected(
+                                    peer_id,
+                                )))
+                                .await
+                                .unwrap();
+                        }
+                        libp2p::swarm::SwarmEvent::IncomingConnection { .. } => {}
+                        libp2p::swarm::SwarmEvent::IncomingConnectionError { .. } => {}
+                        libp2p::swarm::SwarmEvent::OutgoingConnectionError { .. } => {}
+                        libp2p::swarm::SwarmEvent::NewListenAddr { address, .. } => {
+                            log::info!("New listen addr: {:?}", address);
+                        }
+                        libp2p::swarm::SwarmEvent::ExpiredListenAddr { .. } => {}
+                        libp2p::swarm::SwarmEvent::ListenerClosed { .. } => {}
+                        libp2p::swarm::SwarmEvent::ListenerError { .. } => {}
+                        libp2p::swarm::SwarmEvent::Dialing { peer_id, .. } => {}
+                        libp2p::swarm::SwarmEvent::Behaviour(e) => {
+                            handle_behaviour_event(e, &mut to_game).await
+                        }
+                    },
+                    Either::Right((msg, _)) => match msg {
+                        GameEvent::Admin(_) => todo!(),
+                        GameEvent::Game(_) => todo!(),
+                    },
+                }
             }
-        }
+        });
     });
 
     Ok(NetworkManager {
@@ -206,23 +211,48 @@ where
     })
 }
 
-fn handle_behaviour_event<ToGame>(
+async fn handle_behaviour_event<ToGame>(
     event: BehaviourEvent,
     sender: &mut Sender<NetworkEvent<ToGame>>,
 ) {
-    todo!()
+    log::debug!("Behaviour event: {:?}", event);
+    match event {
+        BehaviourEvent::Identify(identify::Event::Received { peer_id, info }) => {
+            if info
+                .protocols
+                .contains(&StreamProtocol::new(IDENTIFY_PROTOCOL))
+            {
+                sender
+                    .send(NetworkEvent::Admin(NetworkAdminEvent::Connected(peer_id)))
+                    .await
+                    .unwrap();
+            }
+
+            if info.protocols.contains(&StreamProtocol::new(RELAY_PROTOCOL)) {
+                // log::error!("Peer {} supports relay", peer_id);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) struct NetworkPlugin;
 
 impl Plugin for NetworkPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, process_network_events);
+        app.add_systems(Update, process_network_events::<(), ()>)
+            .add_event::<NetworkEvent<()>>();
     }
 }
 
-fn process_network_events(
-    network_manager: Res<NetworkManager<(), ()>>,
-    network_events: EventWriter<NetworkEvent<()>>,
-) {
+fn process_network_events<ToGame, FromGame>(
+    network_manager: ResMut<NetworkManager<FromGame, ToGame>>,
+    mut network_events: EventWriter<NetworkEvent<ToGame>>,
+) where
+    ToGame: Send + Sync + 'static,
+    FromGame: Send + 'static,
+{
+    while let Ok(event) = network_manager.from_network.try_recv() {
+        network_events.send(event);
+    }
 }

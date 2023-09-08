@@ -2,35 +2,46 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use async_std::task;
-use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
-use bevy::winit::WinitWindows;
-use bevy::DefaultPlugins;
+use bevy::{
+    log::{Level, LogPlugin},
+    prelude::*,
+    window::PrimaryWindow,
+    winit::WinitWindows,
+    DefaultPlugins,
+};
 use bevy_libp2p::{network::setup_network, GamePlugin};
 use std::io::Cursor;
 use winit::window::Icon;
 
 fn main() -> anyhow::Result<()> {
-    let network_manager = task::block_on(setup_network::<(), ()>())?;
-    App::new()
-        .insert_resource(Msaa::Off)
+    let mut app = App::new();
+    app.insert_resource(Msaa::Off)
         .insert_resource(ClearColor(Color::rgb(0.4, 0.4, 0.4)))
-        .insert_resource(network_manager)
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Bevy libP2P demo".to_string(), // ToDo
-                resolution: (800., 600.).into(),
-                // Bind to canvas included in `index.html`
-                canvas: Some("#bevy".to_owned()),
-                // Tells wasm not to override default event handling, like F5 and Ctrl+R
-                prevent_default_event_handling: false,
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Bevy libP2P demo".to_string(), // ToDo
+                        resolution: (800., 600.).into(),
+                        // Bind to canvas included in `index.html`
+                        canvas: Some("#bevy".to_owned()),
+                        // Tells wasm not to override default event handling, like F5 and Ctrl+R
+                        prevent_default_event_handling: false,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(LogPlugin {
+                    level: Level::INFO,
+                    filter: "wgpu=error,bevy_render=info,bevy_ecs=trace,naga=warn,naga_oil=warn,\
+                        bevy_app=info,yamux=warn,multistream_select=warn,libp2p_kad=info,libp2p=info".to_string(),
+                }),
+        )
         .add_plugins(GamePlugin)
-        .add_systems(Startup, set_window_icon)
-        .run();
+        .add_systems(Startup, set_window_icon);
+    let network_manager = task::block_on(setup_network::<(), ()>())?;
+    app.insert_resource(network_manager);
+    app.run();
 
     Ok(())
 }

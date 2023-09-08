@@ -6,6 +6,7 @@ pub mod crypto;
 mod loading;
 mod menu;
 pub mod network;
+mod peer;
 mod player;
 
 use crate::actions::ActionsPlugin;
@@ -13,6 +14,7 @@ use crate::audio::InternalAudioPlugin;
 use crate::loading::LoadingPlugin;
 use crate::menu::MenuPlugin;
 use crate::network::NetworkPlugin;
+use crate::peer::PeerPlugin;
 use crate::player::PlayerPlugin;
 
 use bevy::app::App;
@@ -47,12 +49,18 @@ impl Plugin for GamePlugin {
                 InternalAudioPlugin,
                 PlayerPlugin,
                 NetworkPlugin,
+                PeerPlugin,
             ))
             .add_plugins(WorldInspectorPlugin::new());
 
         #[cfg(debug_assertions)]
         {
-            app.add_plugins((FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin::default()));
+            app.add_plugins(
+                (
+                    // FrameTimeDiagnosticsPlugin, 
+                    LogDiagnosticsPlugin::default()
+                )
+            );
         }
     }
 }
