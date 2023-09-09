@@ -1,5 +1,5 @@
 use async_std::{
-    channel::{unbounded, Receiver, Sender},
+    channel::{unbounded, Receiver, SendError, Sender},
     task,
 };
 use bevy::prelude::*;
@@ -7,7 +7,7 @@ use futures::{future::Either, prelude::*};
 use libp2p::{
     core::upgrade,
     dcutr, dns, gossipsub, identify, identity,
-    kad::{self, store::MemoryStore},
+    kad::{self, store::MemoryStore, RecordKey},
     noise, ping, relay,
     swarm::{NetworkBehaviour, SwarmBuilder},
     tcp, websocket, yamux, Multiaddr, PeerId, StreamProtocol, Transport,
@@ -45,7 +45,10 @@ pub enum GameEvent<FromGame> {
 
 // For things like killing the swarm and replacing it
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GameAdminEvent {}
+pub enum GameAdminEvent {
+    Host { room_code: String },
+    Quit,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Event)]
 pub enum NetworkEvent<ToGame> {
@@ -64,6 +67,15 @@ pub enum NetworkAdminEvent {
 pub struct NetworkManager<FromGame, ToGame> {
     to_network: Sender<GameEvent<FromGame>>,
     from_network: Receiver<NetworkEvent<ToGame>>,
+}
+
+impl<FromGame, ToGame> NetworkManager<FromGame, ToGame> {
+    pub async fn send_to_network(
+        &mut self,
+        event: GameEvent<FromGame>,
+    ) -> Result<(), SendError<GameEvent<FromGame>>> {
+        self.to_network.send(event).await
+    }
 }
 
 pub async fn setup_network<FromGame, ToGame>(
@@ -139,13 +151,6 @@ where
     let mut swarm =
         SwarmBuilder::with_async_std_executor(transport, behaviour, local_peer_id).build();
 
-    // Start swarm listening.
-    swarm.listen_on(
-        "/dns4/p2p.favil.org/tcp/4001/p2p/12D3KooWJAmx46jdsLbvsEJmUAnQ44Yj4iHmgdsDD4BEYvALnFy8/p2p-circuit".parse()?
-    )?;
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0/ws".parse()?)?;
-    swarm.dial("/dns4/p2p.favil.org/tcp/4001".parse::<Multiaddr>()?)?;
     swarm.behaviour_mut().kad.bootstrap()?;
 
     // Send events over channel.
@@ -197,6 +202,38 @@ where
                         }
                     },
                     Either::Right((msg, _)) => match msg {
+                        GameEvent::Admin(GameAdminEvent::Quit) => break,
+                        GameEvent::Admin(GameAdminEvent::Host { room_code }) => {
+                            // Start swarm listening.
+                            swarm
+                                .listen_on(
+                                    "/dns4/p2p.favil.org/tcp/4001/p2p/\
+                                 12D3KooWJAmx46jdsLbvsEJmUAnQ44Yj4iHmgdsDD4BEYvALnFy8/p2p-circuit"
+                                        .parse()
+                                        .expect("Parse should always work"),
+                                )
+                                .expect("Listen should work");
+                            swarm
+                                .listen_on("/ip4/0.0.0.0/tcp/0".parse().expect("parse"))
+                                .expect("Listen should work");
+                            swarm
+                                .listen_on("/ip4/0.0.0.0/tcp/0/ws".parse().expect("parse"))
+                                .expect("Listen should work");
+                            swarm
+                                .dial(
+                                    "/dns4/p2p.favil.org/tcp/4001"
+                                        .parse::<Multiaddr>()
+                                        .expect("parse"),
+                                )
+                                .expect("Dial should work");
+                            swarm
+                                .behaviour_mut()
+                                .kad
+                                .start_providing(RecordKey::new(
+                                    &format!("/bevy-libp2p-demo/room/{}", room_code).as_bytes(),
+                                ))
+                                .expect("Providing");
+                        }
                         GameEvent::Admin(_) => todo!(),
                         GameEvent::Game(_) => todo!(),
                     },
@@ -228,9 +265,22 @@ async fn handle_behaviour_event<ToGame>(
                     .unwrap();
             }
 
-            if info.protocols.contains(&StreamProtocol::new(RELAY_PROTOCOL)) {
+            if info
+                .protocols
+                .contains(&StreamProtocol::new(RELAY_PROTOCOL))
+            {
                 // log::error!("Peer {} supports relay", peer_id);
             }
+        }
+        BehaviourEvent::Kad(
+            kad::KademliaEvent::OutboundQueryProgressed {
+                result: kad::QueryResult::StartProviding(
+                    Ok(kad::AddProviderOk {key})
+                ),
+                    ..
+            } 
+        ) => {
+            log::info!("Started providing for our room: {:?}", key);
         }
         _ => {}
     }

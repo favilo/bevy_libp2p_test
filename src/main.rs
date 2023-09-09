@@ -29,6 +29,7 @@ fn main() -> anyhow::Result<()> {
                         prevent_default_event_handling: false,
                         ..default()
                     }),
+                    close_when_requested: false,
                     ..default()
                 })
                 .set(LogPlugin {
